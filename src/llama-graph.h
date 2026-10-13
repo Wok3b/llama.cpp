@@ -1060,7 +1060,8 @@ struct llm_graph_context {
               ggml_tensor * w,   // ggml_tensor * as
               ggml_tensor * cur, // ggml_tensor * b
               ggml_tensor * ids,
-              ggml_tensor * w_s = nullptr) const;
+              ggml_tensor * w_s = nullptr,
+              ggml_tensor * ids_e = nullptr) const; // expert ids for w_s and LoRA, if ids are not expert ids
 
     ggml_tensor * build_norm(
              ggml_tensor * cur,
