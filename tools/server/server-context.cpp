@@ -16,6 +16,7 @@
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "expert_cache.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -26,6 +27,8 @@
 #include <random>
 #include <utility>
 #include <fstream>
+#include <climits>
+#include <cstring>
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -37,6 +40,69 @@
 #endif
 
 constexpr int HTTP_POLLING_SECONDS = 1;
+
+// moe-stream: with MOE_CACHE_SLOTS > 0 or auto, MoE experts come from an explicit cache (examples/moe-run) instead of
+// the mmap: small batches from the slots, larger ones (prompt processing) through two layer buffers unless
+// MOE_STREAM_PREFILL=0, which get the predicted and picked experts, or whole layers for batches picking at least
+// MOE_STREAM_FULL of them (default 1 with prefetch, else 0.5). Single tokens prefetch the next layer's likely
+// experts (MOE_PREFETCH_DEPTH, default 1, 0 = off; MOE_PREFETCH_WIDTH). MOE_CACHE_LFU is the eviction
+// half-life in tokens (default 8, 0 = LRU). MOE_IO_THREADS, MOE_CACHE_MAX_TOKENS and MOE_EXPERTS_FILE (bundled
+// sidecar) are optional.
+struct moe_stream {
+    expert_cache ec;
+    int          last_il = INT_MAX;
+    uint64_t     token   = 0;
+};
+
+static std::unique_ptr<moe_stream> g_moe_stream;
+
+// layer index of "<base>-<il>", or -1; rejects derived names like "... (reshaped)"
+static int moe_stream_layer(const char * name, const char * base) {
+    const size_t n = strlen(base);
+    if (strncmp(name, base, n) != 0 || name[n] != '-') {
+        return -1;
+    }
+    const char * num = name + n + 1;
+    if (*num == 0 || strspn(num, "0123456789") != strlen(num)) {
+        return -1;
+    }
+    return atoi(num);
+}
+
+static bool moe_stream_cb_eval(ggml_tensor * t, bool ask, void * user_data) {
+    auto * ms = (moe_stream *) user_data;
+    int il = moe_stream_layer(t->name, "ffn_moe_slot_ids");
+    if (il >= 0) {
+        if (ask) {
+            return true;
+        }
+        if (il <= ms->last_il) {
+            ms->token++; // back at the first MoE layer: next decode step
+        }
+        ms->last_il = il;
+        ms->ec.on_ids(il, (int32_t *) t->data, t->ne[0], t->ne[1], ms->token);
+        return true;
+    }
+    const char * inp = ms->ec.router_input();
+    if (!inp || (il = moe_stream_layer(t->name, inp)) < 0) {
+        return false;
+    }
+    if (ask) {
+        return true;
+    }
+    if (!ggml_is_contiguous(t)) {
+        return true;
+    }
+    // the router input of layer il comes before its slot ids: at or below the last layer seen, it is the next token's
+    const uint64_t token = il <= ms->last_il ? ms->token + 1 : ms->token;
+    ms->ec.on_router_input(il, (const float *) t->data, t->ne[1] * t->ne[2] * t->ne[3], token);
+    return true;
+}
+
+static int moe_stream_env(const char * name, int def) {
+    const char * v = getenv(name);
+    return v && *v ? atoi(v) : def;
+}
 
 static common_speculative_output_limits server_output_limits(const common_params & params) {
     if (params.embedding ||
@@ -1096,6 +1162,29 @@ private:
             params_base.load_progress_callback_user_data = &load_progress_text;
         }
 
+        expert_cache_params ecp;
+        const char * slots_env = getenv("MOE_CACHE_SLOTS");
+        ecp.slots      = slots_env && strcmp(slots_env, "auto") == 0 ? expert_cache_params::SLOTS_AUTO : moe_stream_env("MOE_CACHE_SLOTS", 0);
+        ecp.io_threads = moe_stream_env("MOE_IO_THREADS", ecp.io_threads);
+        ecp.max_tokens = moe_stream_env("MOE_CACHE_MAX_TOKENS", 0); // 0: slots / experts per token
+        ecp.stream_prefill = moe_stream_env("MOE_STREAM_PREFILL", 1) != 0;
+        ecp.predict_depth  = moe_stream_env("MOE_PREFETCH_DEPTH", ecp.predict_depth);
+        ecp.predict_width  = moe_stream_env("MOE_PREFETCH_WIDTH", ecp.predict_width);
+        ecp.lfu_half_life  = moe_stream_env("MOE_CACHE_LFU", ecp.lfu_half_life);
+        if (const char * v = getenv("MOE_STREAM_FULL"); v && *v) {
+            ecp.stream_full = (float) atof(v);
+        }
+        if (const char * bundle = getenv("MOE_EXPERTS_FILE")) {
+            ecp.bundle = bundle;
+        }
+        llama_expert_cache_clear();
+        g_moe_stream.reset();
+        if (ecp.slots != 0) {
+            g_moe_stream = std::make_unique<moe_stream>();
+            params_base.cb_eval           = moe_stream_cb_eval;
+            params_base.cb_eval_user_data = g_moe_stream.get();
+        }
+
         llama_init = common_init_from_params(params_base);
 
         model_tgt = llama_init->model();
@@ -1108,6 +1197,11 @@ private:
 
         if (ctx_tgt == nullptr) {
             SRV_ERR("failed to create_context with model '%s'\n", params_base.model.path.c_str());
+            return false;
+        }
+
+        if (g_moe_stream && !g_moe_stream->ec.init(model_tgt, params_base.model.path, ecp)) {
+            SRV_ERR("%s", "moe-stream: failed to init the expert cache\n");
             return false;
         }
 

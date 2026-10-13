@@ -33,6 +33,10 @@ target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
 
+# moe-stream: expert cache, copied in by patches/install-tools.ps1
+target_sources(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR}/examples/moe-run/expert_cache.cpp)
+target_include_directories(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR}/examples/moe-run ${PROJECT_SOURCE_DIR}/src)
+
 # llama-server-impl: server logic, reusable by app
 
 set(TARGET llama-server-impl)
