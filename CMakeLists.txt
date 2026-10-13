@@ -254,6 +254,20 @@ if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
 
+# moe-stream: checked out as the llama.cpp submodule of moe-stream, build its tools (../tools) and the
+# expert cache into llama-server. Elsewhere this does nothing.
+set(MOE_STREAM_TOOLS ${CMAKE_CURRENT_SOURCE_DIR}/../tools CACHE PATH "moe-stream tools directory")
+if (LLAMA_BUILD_COMMON AND EXISTS ${MOE_STREAM_TOOLS}/moe-run/expert_cache.cpp)
+    message(STATUS "moe-stream: tools from ${MOE_STREAM_TOOLS}")
+    add_subdirectory(${MOE_STREAM_TOOLS}/moe-run   ${CMAKE_CURRENT_BINARY_DIR}/moe-run)
+    add_subdirectory(${MOE_STREAM_TOOLS}/moe-trace ${CMAKE_CURRENT_BINARY_DIR}/moe-trace)
+    if (TARGET server-context)
+        target_sources(server-context PRIVATE ${MOE_STREAM_TOOLS}/moe-run/expert_cache.cpp)
+        target_include_directories(server-context PRIVATE ${MOE_STREAM_TOOLS}/moe-run ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        target_compile_definitions(server-context PRIVATE LLAMA_MOE_STREAM)
+    endif()
+endif()
+
 if (LLAMA_BUILD_APP)
     add_subdirectory(app)
 endif()

@@ -16,7 +16,9 @@
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
-#include "expert_cache.h"
+#ifdef LLAMA_MOE_STREAM
+#include "expert_cache.h" // built in by moe-stream (CMakeLists.txt)
+#endif
 
 #include <algorithm>
 #include <cstddef>
@@ -41,6 +43,7 @@
 
 constexpr int HTTP_POLLING_SECONDS = 1;
 
+#ifdef LLAMA_MOE_STREAM
 // moe-stream: with MOE_CACHE_SLOTS > 0 or auto, MoE experts come from an explicit cache (examples/moe-run) instead of
 // the mmap: small batches from the slots, larger ones (prompt processing) through two layer buffers unless
 // MOE_STREAM_PREFILL=0, which get the predicted and picked experts, or whole layers for batches picking at least
@@ -103,6 +106,7 @@ static int moe_stream_env(const char * name, int def) {
     const char * v = getenv(name);
     return v && *v ? atoi(v) : def;
 }
+#endif // LLAMA_MOE_STREAM
 
 static common_speculative_output_limits server_output_limits(const common_params & params) {
     if (params.embedding ||
@@ -1162,6 +1166,7 @@ private:
             params_base.load_progress_callback_user_data = &load_progress_text;
         }
 
+#ifdef LLAMA_MOE_STREAM
         expert_cache_params ecp;
         const char * slots_env = getenv("MOE_CACHE_SLOTS");
         ecp.slots      = slots_env && strcmp(slots_env, "auto") == 0 ? expert_cache_params::SLOTS_AUTO : moe_stream_env("MOE_CACHE_SLOTS", 0);
@@ -1184,6 +1189,7 @@ private:
             params_base.cb_eval           = moe_stream_cb_eval;
             params_base.cb_eval_user_data = g_moe_stream.get();
         }
+#endif
 
         llama_init = common_init_from_params(params_base);
 
@@ -1200,10 +1206,12 @@ private:
             return false;
         }
 
+#ifdef LLAMA_MOE_STREAM
         if (g_moe_stream && !g_moe_stream->ec.init(model_tgt, params_base.model.path, ecp)) {
             SRV_ERR("%s", "moe-stream: failed to init the expert cache\n");
             return false;
         }
+#endif
 
         vocab = llama_model_get_vocab(model_tgt);
 
