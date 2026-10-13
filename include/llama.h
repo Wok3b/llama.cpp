@@ -211,6 +211,13 @@ extern "C" {
         LLAMA_LOAD_MODE_DIRECT_IO  =  4, // use direct I/O if available
     };
 
+    // moe-stream: expert cache. Register a cache tensor [ne0, ne1, n_slots] of the same type as an
+    // MoE expert tensor `orig` [ne0, ne1, n_expert]. For batches of at most `max_tokens` tokens the
+    // graph runs the expert matmuls on `cache`, addressed by the "ffn_moe_slot_ids-<il>" tensor,
+    // which the runtime rewrites in place (expert id -> slot) from its eval callback.
+    LLAMA_API void llama_expert_cache_register(const struct ggml_tensor * orig, struct ggml_tensor * cache, int32_t max_tokens);
+    LLAMA_API void llama_expert_cache_clear(void);
+
     LLAMA_API const char * llama_load_mode_name(enum llama_load_mode load_mode);
     LLAMA_API enum llama_load_mode llama_load_mode_from_str(const char * str);
 
