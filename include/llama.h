@@ -216,6 +216,9 @@ extern "C" {
     // graph runs the expert matmuls on `cache`, addressed by the "ffn_moe_slot_ids-<il>" tensor,
     // which the runtime rewrites in place (expert id -> slot) from its eval callback.
     LLAMA_API void llama_expert_cache_register(const struct ggml_tensor * orig, struct ggml_tensor * cache, int32_t max_tokens);
+    // moe-stream: for batches above max_tokens, run on `stream` instead: same shape as `orig`, all experts, which
+    // the runtime fills before the layer runs. "ffn_moe_slot_ids-<il>" keeps the real expert ids in this case.
+    LLAMA_API void llama_expert_cache_register_stream(const struct ggml_tensor * orig, struct ggml_tensor * stream);
     LLAMA_API void llama_expert_cache_clear(void);
 
     LLAMA_API const char * llama_load_mode_name(enum llama_load_mode load_mode);
