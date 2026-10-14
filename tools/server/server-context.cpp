@@ -50,7 +50,7 @@ constexpr int HTTP_POLLING_SECONDS = 1;
 // MOE_STREAM_FULL of them (default 1 with prefetch, else 0.5). Single tokens prefetch the next layer's likely
 // experts (MOE_PREFETCH_DEPTH, default 1, 0 = off; MOE_PREFETCH_WIDTH). MOE_CACHE_LFU is the eviction
 // half-life in tokens (default 8, 0 = LRU). MOE_IO_THREADS, MOE_CACHE_MAX_TOKENS and MOE_EXPERTS_FILE (bundled
-// sidecar) are optional.
+// sidecar) are optional. The warm-up decode is skipped unless MOE_WARMUP=1.
 struct moe_stream {
     expert_cache ec;
     int          last_il = INT_MAX;
@@ -1188,6 +1188,10 @@ private:
             g_moe_stream = std::make_unique<moe_stream>();
             params_base.cb_eval           = moe_stream_cb_eval;
             params_base.cb_eval_user_data = g_moe_stream.get();
+            // warm-up runs before the cache exists and pages experts in through the mmap 4 KiB at a time (~13 s cold)
+            if (moe_stream_env("MOE_WARMUP", 0) == 0) {
+                params_base.warmup = false;
+            }
         }
 #endif
 
